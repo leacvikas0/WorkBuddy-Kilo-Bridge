@@ -1,0 +1,33 @@
+﻿# Dependencies
+node_modules/
+package-lock.json.bak
+
+# Logs & Supervisor State
+*.log
+*.log.*
+*.err.log
+workbuddy-bridge.log*
+workbuddy-bridge.err.log*
+
+# Runtime / Scratch / Debug Dumps
+failed-request.json
+*.tmp
+*.bak
+*.dump
+scratch/
+test-results/
+
+# Auth & Secrets
+*.info
+*.token
+auth/
+.env
+.env.*
+!.env.example
+
+# OS / Editor Files
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
