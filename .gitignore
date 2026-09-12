@@ -1,4 +1,4 @@
-﻿# Dependencies
+# Dependencies
 node_modules/
 package-lock.json.bak
 
@@ -21,6 +21,7 @@ test-results/
 *.info
 *.token
 auth/
+accounts/
 .env
 .env.*
 !.env.example

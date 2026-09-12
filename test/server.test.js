@@ -155,3 +155,122 @@ test('POST chat accepts bodies larger than 4MB without 413 error', async () => {
     fs.unlinkSync(fp);
   }
 });
+
+test('POST chat automatically rotates account on 429 quota exhaustion', async () => {
+  const tmpAccountsDir = path.join(os.tmpdir(), 'wb-srv-pool-' + Date.now() + '-' + Math.random().toString(16).slice(2));
+  fs.mkdirSync(tmpAccountsDir, { recursive: true });
+
+  const acc1 = { name: 'acc1', account: { uid: 'u1' }, auth: { accessToken: 'tok-1', refreshToken: 'r1', domain: 'www.workbuddy.ai' } };
+  const acc2 = { name: 'acc2', account: { uid: 'u2' }, auth: { accessToken: 'tok-2', refreshToken: 'r2', domain: 'www.workbuddy.ai' } };
+  fs.writeFileSync(path.join(tmpAccountsDir, 'account_1.json'), JSON.stringify(acc1));
+  fs.writeFileSync(path.join(tmpAccountsDir, 'account_2.json'), JSON.stringify(acc2));
+
+  const { resetAccountPool, getAccountPool } = require('../lib/pool');
+  resetAccountPool();
+  getAccountPool({ accountsDir: tmpAccountsDir });
+
+  const calls = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    const authHeader = opts.headers.Authorization;
+    calls.push(authHeader);
+    if (authHeader === 'Bearer tok-1') {
+      return new Response(JSON.stringify({ code: 6004, msg: 'usage exceeds frequency limit' }), { status: 429 });
+    }
+    return new Response(CHAT_SSE, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+  };
+
+  const payload = {
+    model: 'hy4-preview',
+    messages: [{ role: 'user', content: 'hi' }],
+    stream: false
+  };
+  const req = {
+    method: 'POST',
+    url: '/v1/chat/completions',
+    on(ev, fn) {
+      if (ev === 'data') fn(JSON.stringify(payload));
+      if (ev === 'end') fn();
+      return this;
+    },
+    destroy() {}
+  };
+  const res = {
+    status: 0,
+    chunks: [],
+    writeHead(s) { this.status = s; },
+    write(c) { this.chunks.push(String(c)); },
+    end(c) { if (c !== undefined) this.chunks.push(String(c)); }
+  };
+
+  try {
+    await handleChat(req, res);
+    assert.equal(res.status, 200);
+    assert.deepEqual(calls, ['Bearer tok-1', 'Bearer tok-2']);
+    const body = JSON.parse(res.chunks.join(''));
+    assert.equal(body.choices[0].message.content, 'OK');
+  } finally {
+    globalThis.fetch = realFetch;
+    resetAccountPool();
+    fs.rmSync(tmpAccountsDir, { recursive: true, force: true });
+  }
+});
+
+test('POST chat automatically rotates account on 6004 frequency limit with non-429 status', async () => {
+  const tmpAccountsDir = path.join(os.tmpdir(), 'wb-srv-pool2-' + Date.now() + '-' + Math.random().toString(16).slice(2));
+  fs.mkdirSync(tmpAccountsDir, { recursive: true });
+
+  const acc1 = { name: 'acc1', account: { uid: 'u1' }, auth: { accessToken: 'tok-1', refreshToken: 'r1', domain: 'www.workbuddy.ai' } };
+  const acc2 = { name: 'acc2', account: { uid: 'u2' }, auth: { accessToken: 'tok-2', refreshToken: 'r2', domain: 'www.workbuddy.ai' } };
+  fs.writeFileSync(path.join(tmpAccountsDir, 'account_1.json'), JSON.stringify(acc1));
+  fs.writeFileSync(path.join(tmpAccountsDir, 'account_2.json'), JSON.stringify(acc2));
+
+  const { resetAccountPool, getAccountPool } = require('../lib/pool');
+  resetAccountPool();
+  getAccountPool({ accountsDir: tmpAccountsDir });
+
+  const calls = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    const authHeader = opts.headers.Authorization;
+    calls.push(authHeader);
+    if (authHeader === 'Bearer tok-1') {
+      return new Response(JSON.stringify({ code: 6004, msg: 'frequency limit reached' }), { status: 400 });
+    }
+    return new Response(CHAT_SSE, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+  };
+
+  const payload = {
+    model: 'hy4-preview',
+    messages: [{ role: 'user', content: 'hi' }],
+    stream: false
+  };
+  const req = {
+    method: 'POST',
+    url: '/v1/chat/completions',
+    on(ev, fn) {
+      if (ev === 'data') fn(JSON.stringify(payload));
+      if (ev === 'end') fn();
+      return this;
+    },
+    destroy() {}
+  };
+  const res = {
+    status: 0,
+    chunks: [],
+    writeHead(s) { this.status = s; },
+    write(c) { this.chunks.push(String(c)); },
+    end(c) { if (c !== undefined) this.chunks.push(String(c)); }
+  };
+
+  try {
+    await handleChat(req, res);
+    assert.equal(res.status, 200);
+    assert.deepEqual(calls, ['Bearer tok-1', 'Bearer tok-2']);
+  } finally {
+    globalThis.fetch = realFetch;
+    resetAccountPool();
+    fs.rmSync(tmpAccountsDir, { recursive: true, force: true });
+  }
+});
+

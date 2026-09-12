@@ -86,6 +86,28 @@ switch ($Action) {
             Write-Host "Health Probe:     Unreachable or Unhealthy" -ForegroundColor Red
         }
 
+        # Account Pool status
+        $accountsDir = Join-Path $bridgeDir "accounts"
+        if (Test-Path $accountsDir) {
+            $accFiles = Get-ChildItem -Path $accountsDir -Filter "*.json" | Where-Object { $_.Name -ne "active.json" } | Sort-Object Name
+            $activeJson = Join-Path $accountsDir "active.json"
+            $activeKey = "unknown"
+            if (Test-Path $activeJson) {
+                try {
+                    $act = Get-Content $activeJson -Raw | ConvertFrom-Json
+                    $activeKey = if ($act.activeKey) { $act.activeKey } else { "Index $($act.activeIndex)" }
+                } catch {}
+            }
+            Write-Host "`nAccount Pool:     $($accFiles.Count) accounts configured | Active: $activeKey" -ForegroundColor Cyan
+            foreach ($f in $accFiles) {
+                try {
+                    $d = Get-Content $f.FullName -Raw | ConvertFrom-Json
+                    $isAct = if ($d.name -eq $activeKey -or $d.key -eq $activeKey) { " [ACTIVE]" } else { "" }
+                    Write-Host "  - $($d.name) (UID: $($d.account.uid))$isAct"
+                } catch {}
+            }
+        }
+
         # Active processes
         $pids = Get-BridgeProcesses
         if ($pids.Count -gt 0) {

@@ -4,6 +4,7 @@ const path = require('path');
 const bridgeDir = __dirname;
 const { listModels } = require('./lib/models');
 const { readAuth, buildUpstreamHeaders, tryRefresh } = require('./lib/auth');
+const { getAccountPool, isQuotaExhausted } = require('./lib/pool');
 const { buildUpstreamBody } = require('./lib/normalize');
 const { optimizeMessageImages } = require('./lib/images');
 const { relayStream, accumulateNonStream } = require('./lib/translate');
@@ -11,12 +12,6 @@ const { relayStream, accumulateNonStream } = require('./lib/translate');
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.PORT || 4121);
 const UPSTREAM = 'https://www.workbuddy.ai/v2/chat/completions';
-const DEFAULT_AUTH_PATH = process.env.LOCALAPPDATA
-  ? path.join(process.env.LOCALAPPDATA, 'CodeBuddyExtension', 'Data', 'Public', 'auth', 'workbuddy-desktop-ai.info')
-  : (process.env.USERPROFILE
-      ? path.join(process.env.USERPROFILE, 'AppData', 'Local', 'CodeBuddyExtension', 'Data', 'Public', 'auth', 'workbuddy-desktop-ai.info')
-      : 'C:\\Users\\silen\\AppData\\Local\\CodeBuddyExtension\\Data\\Public\\auth\\workbuddy-desktop-ai.info');
-const authPath = () => process.env.WB_AUTH_PATH || DEFAULT_AUTH_PATH;
 const MAX_BODY_BYTES = 512 * 1024 * 1024; // 512MB to support large multi-image agentic payloads
 
 function sendJson(res, status, obj) {
@@ -108,58 +103,103 @@ async function handleChat(req, res) {
 
   console.log(`[workbuddy-bridge] Chat request: model=${upBody.model}, inMaxTokens=${inBody.max_tokens ?? inBody.max_completion_tokens}, upMaxTokens=${upBody.max_tokens}, upBudget=${upBody.budget_tokens ?? upBody.thinking?.budgetTokens ?? 'none'}`);
 
-  let auth;
-  try { auth = readAuth(authPath()); }
-  catch (e) { return sendJson(res, 500, { error: { message: 'WorkBuddy auth file not found or invalid. Re-login to WorkBuddy.', code: 'auth_missing' } }); }
-
   const wantStream = inBody.stream !== false;
-  let upRes;
-  try { upRes = await postUpstream(auth, upBody, ac.signal); }
-  catch (e) {
-    if (ac.signal.aborted) return;
-    return sendJson(res, 502, { error: { message: 'upstream unreachable', code: 'upstream_error' } });
+  const pool = getAccountPool();
+  let poolCount = 0;
+  try { poolCount = pool.getCount(); } catch {}
+  if (poolCount === 0) {
+    return sendJson(res, 500, { error: { message: 'WorkBuddy auth file not found or invalid. Re-login to WorkBuddy.', code: 'auth_missing' } });
   }
 
-  // If 401, first try re-reading auth file from disk (desktop app might have rotated credentials)
-  if (upRes.status === 401) {
-    let reloaded;
-    try { reloaded = readAuth(authPath()); } catch {}
-    if (reloaded && reloaded.token !== auth.token) {
-      auth = reloaded;
-      try { upRes = await postUpstream(auth, upBody, ac.signal); }
-      catch (e) {
-        if (ac.signal.aborted) return;
-        return sendJson(res, 502, { error: { message: 'upstream unreachable', code: 'upstream_error' } });
+  const maxAttempts = poolCount;
+  let upRes = null;
+  let lastFailedResult = null;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    let account;
+    try { account = pool.getActiveAccount(); }
+    catch (e) { return sendJson(res, 500, { error: { message: 'WorkBuddy auth file not found or invalid. Re-login to WorkBuddy.', code: 'auth_missing' } }); }
+    let auth = account.auth;
+
+    try { upRes = await postUpstream(auth, upBody, ac.signal); }
+    catch (e) {
+      if (ac.signal.aborted) return;
+      return sendJson(res, 502, { error: { message: 'upstream unreachable', code: 'upstream_error' } });
+    }
+
+    // 1. If 401, first try re-reading auth file from disk, then refresh token
+    if (upRes.status === 401) {
+      let reloaded;
+      try { reloaded = readAuth(account.filePath); } catch {}
+      if (reloaded && reloaded.token !== auth.token) {
+        auth = reloaded;
+        account.auth = auth;
+        try { upRes = await postUpstream(auth, upBody, ac.signal); }
+        catch (e) {
+          if (ac.signal.aborted) return;
+          return sendJson(res, 502, { error: { message: 'upstream unreachable', code: 'upstream_error' } });
+        }
+      }
+
+      if (upRes.status === 401 && auth.refreshToken) {
+        const refreshed = await tryRefresh(auth).catch(() => null);
+        if (refreshed) {
+          auth = refreshed;
+          pool.updateAccountToken(account, refreshed.token);
+          try { upRes = await postUpstream(auth, upBody, ac.signal); }
+          catch (e) {
+            if (ac.signal.aborted) return;
+            return sendJson(res, 502, { error: { message: 'upstream unreachable', code: 'upstream_error' } });
+          }
+        }
+      }
+
+      // If still 401, rotate to next account if available
+      if (upRes.status === 401) {
+        if (attempt < maxAttempts - 1) {
+          pool.rotateNext('session_expired_401');
+          continue;
+        } else {
+          return sendJson(res, 401, { error: { message: 'WorkBuddy session expired. Re-login to WorkBuddy.', code: 'auth_expired' } });
+        }
       }
     }
-  }
 
-  // If still 401, try active refresh using refreshToken
-  if (upRes.status === 401 && auth.refreshToken) {
-    const refreshed = await tryRefresh(auth).catch(() => null);
-    if (refreshed) {
-      auth = refreshed;
-      try { upRes = await postUpstream(auth, upBody, ac.signal); }
-      catch (e) {
-        if (ac.signal.aborted) return;
-        return sendJson(res, 502, { error: { message: 'upstream unreachable', code: 'upstream_error' } });
+    // 2. Check for Quota / Frequency Limit (HTTP 429)
+    if (upRes.status === 429) {
+      const text = await upRes.text().catch(() => '');
+      console.warn(`[workbuddy-bridge] Account [${account.name}] hit quota limit (HTTP 429) -> ${text.slice(0, 200)}`);
+      lastFailedResult = upstreamError(429, text);
+      if (attempt < maxAttempts - 1) {
+        pool.rotateNext('quota_limit_429');
+        continue;
       }
+      return sendJson(res, lastFailedResult.status, lastFailedResult.body);
     }
-  }
 
-  if (upRes.status === 401) {
-    return sendJson(res, 401, { error: { message: 'WorkBuddy session expired. Re-login to WorkBuddy.', code: 'auth_expired' } });
-  }
+    // 3. Other non-200 responses (check if body contains 6004 or quota messages)
+    if (!upRes.ok) {
+      const text = await upRes.text().catch(() => '');
+      if (isQuotaExhausted(upRes.status, text)) {
+        console.warn(`[workbuddy-bridge] Account [${account.name}] hit frequency limit (${upRes.status}) -> ${text.slice(0, 200)}`);
+        lastFailedResult = upstreamError(upRes.status, text);
+        if (attempt < maxAttempts - 1) {
+          pool.rotateNext('quota_limit_' + upRes.status);
+          continue;
+        }
+        return sendJson(res, lastFailedResult.status, lastFailedResult.body);
+      }
 
-  if (!upRes.ok) {
-    const text = await upRes.text().catch(() => '');
-    console.error('[workbuddy-bridge] Upstream error: HTTP ' + upRes.status + ' -> ' + text.slice(0, 300));
-    try {
-      const fs = require('fs');
-      fs.writeFileSync(path.join(bridgeDir, 'failed-request.json'), JSON.stringify(upBody, null, 2));
-    } catch {}
-    const mapped = upstreamError(upRes.status, text);
-    return sendJson(res, mapped.status, mapped.body);
+      console.error('[workbuddy-bridge] Upstream error: HTTP ' + upRes.status + ' -> ' + text.slice(0, 300));
+      try {
+        fs.writeFileSync(path.join(bridgeDir, 'failed-request.json'), JSON.stringify(upBody, null, 2));
+      } catch {}
+      const mapped = upstreamError(upRes.status, text);
+      return sendJson(res, mapped.status, mapped.body);
+    }
+
+    // HTTP 200 OK!
+    break;
   }
 
   if (wantStream) return relayStream(upRes, res);
