@@ -104,7 +104,7 @@ test('POST chat passes normalized max_tokens, tool_choice, and stop to upstream 
     await handleChat(req, res);
     assert.equal(res.status, 200);
     assert.ok(sentBody);
-    assert.equal(sentBody.max_tokens, 32768);
+    assert.equal(sentBody.max_tokens, 131072);
     assert.equal(sentBody.max_completion_tokens, undefined);
     assert.equal(sentBody.tool_choice, 'my_tool');
     assert.deepEqual(sentBody.stop, ['<stop>']);

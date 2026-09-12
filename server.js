@@ -106,6 +106,8 @@ async function handleChat(req, res) {
   try { upBody = buildUpstreamBody(inBody); }
   catch (e) { return sendJson(res, e.statusCode || 400, { error: { message: e.message, code: e.code || 'bad_request' } }); }
 
+  console.log(`[workbuddy-bridge] Chat request: model=${upBody.model}, inMaxTokens=${inBody.max_tokens ?? inBody.max_completion_tokens}, upMaxTokens=${upBody.max_tokens}, upBudget=${upBody.budget_tokens ?? upBody.thinking?.budgetTokens ?? 'none'}`);
+
   let auth;
   try { auth = readAuth(authPath()); }
   catch (e) { return sendJson(res, 500, { error: { message: 'WorkBuddy auth file not found or invalid. Re-login to WorkBuddy.', code: 'auth_missing' } }); }

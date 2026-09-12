@@ -111,12 +111,12 @@ test('normalizeStop helper handles undefined, strings, arrays, and empty arrays'
 });
 
 test('buildUpstreamBody normalizes max_tokens and max_completion_tokens', () => {
-  // max_completion_tokens fallback
+  // max_completion_tokens fallback with legacy 32k expanded to 131072
   const out1 = buildUpstreamBody({
     messages: [{ role: 'user', content: 'hi' }],
     max_completion_tokens: 32768
   });
-  assert.equal(out1.max_tokens, 32768);
+  assert.equal(out1.max_tokens, 131072);
   assert.equal(out1.max_completion_tokens, undefined);
 
   // max_tokens takes precedence
@@ -127,12 +127,12 @@ test('buildUpstreamBody normalizes max_tokens and max_completion_tokens', () => 
   });
   assert.equal(out2.max_tokens, 16384);
 
-  // string numeric conversion to integer
+  // string numeric conversion to integer and expansion
   const out3 = buildUpstreamBody({
     messages: [{ role: 'user', content: 'hi' }],
-    max_completion_tokens: '32768'
+    max_completion_tokens: '32000'
   });
-  assert.equal(out3.max_tokens, 32768);
+  assert.equal(out3.max_tokens, 131072);
   assert.strictEqual(typeof out3.max_tokens, 'number');
 });
 
