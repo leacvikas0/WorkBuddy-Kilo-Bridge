@@ -90,15 +90,17 @@ WorkBuddy-Kilo-Bridge/
 |-- workbuddy-bridge.log      # Active runtime logs
 |-- lib/
 |   |-- auth.js               # WorkBuddy desktop credentials reader
+|   |-- pool.js               # Multi-account pool manager & sticky quota failover
 |   |-- images.js             # MozJPEG image compressor & sliding window
 |   |-- models.js             # Model registry & capabilities
 |   |-- normalize.js          # Request schema normalization
 |   |-- translate.js          # SSE streaming relay & chunk sanitization
 |-- test/
 |   |-- auth.test.js          # Auth discovery & token parsing unit tests
+|   |-- pool.test.js          # Account pool rotation & 429 failover unit tests
 |   |-- images.test.js        # Image downscaling & compression unit tests
 |   |-- normalize.test.js     # Body normalization & edge case tests
-|   |-- server.test.js        # HTTP route integration tests
+|   |-- server.test.js        # HTTP route & account failover integration tests
 |   |-- translate.test.js     # SSE parsing & usage translation tests
 |   |-- live-smoke.js         # Live upstream smoke test suite
 |-- docs/

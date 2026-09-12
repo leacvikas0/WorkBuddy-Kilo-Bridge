@@ -59,11 +59,19 @@ odejs`). Both try to free port 4121 and kill each other's server process every 5
 - **Cause**: DeepSeek-V4.1-Flash has a hard 32,000 token ceiling on reasoning tokens. If a subagent runs on `variant: "max"` for complex code generation, it drafts all files in its head, hitting the 32k cap and returning 0 output tokens.
 - **Fix**: In Kilo Code, switch subagents to `variant: "high"` or `"medium"`.
 
-### Scenario C: "usage exceeds frequency limit" (Error 6004)
-- **Cause**: Daily token allowance reached on the free tier of `deepseek-v4.1-flash`.
-- **Reset Time**: Upstream resets daily at `00:02:28 UTC+8` (16:02 UTC / 21:32 IST).
-- **Workaround**: Switch to `hy4-preview` in Kilo Code (Hunyuan has separate independent quotas).
+### Scenario C: "usage exceeds frequency limit" (Error 6004 / HTTP 429)
+- **Automatic Resolution**: With the multi-account pool (`lib/pool.js`), the bridge automatically catches HTTP 429 and error code 6004, rotates the active account to the next available account in `accounts/`, and retries the request transparently in <400ms without failing the Kilo Code session.
+- **Account Pool Status**:
+  ```powershell
+  .\manage-bridge.ps1 status
+  ```
+  Shows configured accounts and which account is currently active.
+- **Manual Rotation (if desired)**:
+  ```powershell
+  .\manage-bridge.ps1 -Action switch
+  ```
 
 ### Scenario D: "auth_expired" or 401 Unauthorized
-- **Cause**: WorkBuddy desktop login session expired or logged out.
-- **Fix**: Open the official **WorkBuddy Desktop application**, log in or refresh your session. The bridge automatically picks up the updated token on the very next request without requiring a bridge restart.
+- **Cause**: WorkBuddy desktop login session expired or logged out on all configured accounts.
+- **Fix**: Open the official **WorkBuddy Desktop application**, log in or refresh your session. The bridge automatically picks up updated tokens from disk and runs `tryRefresh()` with `refreshToken`.
+

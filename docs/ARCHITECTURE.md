@@ -154,3 +154,20 @@ During system restart or manual CLI re-execution, an intermittent failure mode o
 4. **The Conflict**: Daemon A started `server.js` on port 4121. Daemon B ran its startup check, detected port 4121 occupied, and killed Daemon A's server. Daemon B then started its own `server.js`. Daemon A detected its child died, triggered a restart, and killed Daemon B's server.
 5. This produced a continuous 5-second kill loop, making the bridge work intermittently depending on whether a request landed during the brief ~2-second window before the rival daemon executed taskkill.
 6. **Resolution**: Running `manage-bridge.ps1 restart` terminates all stale and conflicting instances across both Node paths and restarts a single supervisor cleanly under Task Scheduler.
+
+---
+
+## 5. Multi-Account Pool & Sticky Quota Failover (`lib/pool.js`)
+
+### 5.1 Why Sticky Rotation?
+Tencent's prompt prefix caching is strictly scoped to the authenticated `X-User-Id` and session token. Alternating accounts per request (round-robin) destroys prompt cache hits (dropping cache hit rate from 96.8% to 0%), resulting in massive latency spikes and burning account quotas 10x faster.
+
+`AccountPool` implements a **sticky failover strategy**:
+1. **Stick to Active Account**: All consecutive turns use the current active account, maintaining maximum prompt cache hit rate (~96.8%).
+2. **Quota / Frequency Limit Detection**: When upstream returns HTTP 429 or JSON containing `code: 6004`, `frequency limit`, or `usage exceeds`, the bridge:
+   - Rotates `activeIndex` to the next account in the pool.
+   - Saves the updated pointer state to `accounts/active.json`.
+   - Re-signs headers and retries the upstream request transparently before writing any response bytes to the client.
+   - Kilo Code waits on the open connection and receives a seamless HTTP 200 stream without error modals or broken agent turns.
+3. **Session Expiry (401) Recovery**: When an account returns 401, the bridge calls `tryRefresh()` with `refreshToken` and updates the refreshed token on disk (`account.filePath`), keeping credentials fresh across reboots.
+4. **Security**: The `accounts/` directory is strictly ignored in `.gitignore`, ensuring personal tokens are never pushed to Git.
