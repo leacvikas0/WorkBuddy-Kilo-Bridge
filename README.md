@@ -38,6 +38,71 @@ You should see:
 
 ---
 
+## Kilo Code Integration (How to Write it in Kilo)
+
+To connect the Kilo Code extension in VS Code to this bridge:
+
+### Option A: Direct Config (`~/.config/kilo/kilo.jsonc`)
+
+Add the `workbuddy` provider into the `"provider"` block of `~/.config/kilo/kilo.jsonc`:
+
+```jsonc
+"workbuddy": {
+  "name": "WorkBuddy",
+  "npm": "@ai-sdk/openai-compatible",
+  "options": {
+    "apiKey": "wb-local-bridge",
+    "baseURL": "http://127.0.0.1:4121/v1",
+    "timeout": 600000,
+    "chunkTimeout": 600000
+  },
+  "models": {
+    "deepseek-v4.1-flash": {
+      "id": "deepseek-v4.1-flash",
+      "name": "DeepSeek V4.1 Flash (WorkBuddy Free)",
+      "attachment": true,
+      "reasoning": true,
+      "tool_call": true,
+      "temperature": true,
+      "limit": {
+        "context": 1048576,
+        "output": 131072
+      },
+      "modalities": { "input": ["text", "image"], "output": ["text"] },
+      "options": { "reasoningEffort": "max" },
+      "variants": {
+        "low": { "reasoningEffort": "low", "thinking": { "type": "enabled", "budgetTokens": 16000 } },
+        "medium": { "reasoningEffort": "medium", "thinking": { "type": "enabled", "budgetTokens": 32000 } },
+        "high": { "reasoningEffort": "high", "thinking": { "type": "enabled", "budgetTokens": 64000 } },
+        "max": { "reasoningEffort": "max", "thinking": { "type": "enabled", "budgetTokens": 120000 } }
+      }
+    },
+    "hy4-preview": {
+      "id": "hy4-preview",
+      "name": "HY4 Preview (WorkBuddy)",
+      "attachment": true,
+      "reasoning": true,
+      "tool_call": true,
+      "limit": { "context": 1048576, "output": 131072 },
+      "modalities": { "input": ["text", "image"], "output": ["text"] }
+    }
+  },
+  "whitelist": ["deepseek-v4.1-flash", "hy4-preview"]
+}
+```
+Set default active model:
+```jsonc
+"model": "workbuddy/deepseek-v4.1-flash"
+```
+
+### Option B: Kilo Code UI (Visual Settings)
+1. Open **Kilo Code** Settings -> **Providers** -> **Add Custom Provider** (OpenAI Compatible).
+2. Set **Base URL**: `http://127.0.0.1:4121/v1`
+3. Set **API Key**: `wb-local-bridge`
+4. Add Model IDs: `deepseek-v4.1-flash` and `hy4-preview`.
+
+See **[docs/KILO_SETUP.md](docs/KILO_SETUP.md)** for full instructions, timeout configurations, and reasoning tier specifications.
+
 ## Management CLI
 
 Use `manage-bridge.ps1` to control the 24/7 background service:
@@ -59,17 +124,21 @@ Use `manage-bridge.ps1` to control the 24/7 background service:
 
 Comprehensive documentation is organized in the [`docs/`](file:///C:/Users/silen/Documents/WorkBuddy-Kilo-Bridge/docs/) directory:
 
-1. **[Architecture & Design Specification](file:///C:/Users/silen/Documents/WorkBuddy-Kilo-Bridge/docs/ARCHITECTURE.md)**:
+1. **[Kilo Code Integration Guide](docs/KILO_SETUP.md)**:
+   - Complete `kilo.jsonc` provider & model configuration.
+   - UI setup in VS Code.
+   - Timeout and reasoning token budget tuning.
+2. **[Architecture & Design Specification](file:///C:/Users/silen/Documents/WorkBuddy-Kilo-Bridge/docs/ARCHITECTURE.md)**:
    - System design and request pipeline.
    - Normalization layer (`max_tokens`, `tool_choice`, `stop`, `cache_control`).
    - Image optimization engine (MozJPEG 85 4:4:4, sliding window).
    - 24/7 Windows Task Scheduler supervisor.
    - Dual-supervisor conflict root-cause analysis.
-2. **[API Reference](file:///C:/Users/silen/Documents/WorkBuddy-Kilo-Bridge/docs/API_REFERENCE.md)**:
+3. **[API Reference](file:///C:/Users/silen/Documents/WorkBuddy-Kilo-Bridge/docs/API_REFERENCE.md)**:
    - Endpoints (`/healthz`, `/v1/models`, `/v1/chat/completions`).
    - Model specifications (`deepseek-v4.1-flash`, `hy4-preview`).
    - Token usage and cache mapping.
-3. **[Operations & Troubleshooting](file:///C:/Users/silen/Documents/WorkBuddy-Kilo-Bridge/docs/OPERATIONS.md)**:
+4. **[Operations & Troubleshooting](file:///C:/Users/silen/Documents/WorkBuddy-Kilo-Bridge/docs/OPERATIONS.md)**:
    - Service management via PowerShell.
    - Fixing `ECONNRESET`, 32k reasoning loops, and error 6004.
    - WorkBuddy desktop authentication refreshes.
