@@ -127,3 +127,81 @@ test('normalizeUsage maps prompt_cache_hit_tokens to prompt_tokens_details.cache
   const res3 = normalizeUsage(u3);
   assert.equal(res3.prompt_cache_hit_tokens, 500);
 });
+
+
+const { createStreamGuard } = require('../lib/loop-detector');
+
+const CYCLE = ['Let', 'me', 'write.', 'Let', 'me', 'search.', 'Let', 'me', 'go.', 'OK.'];
+
+function loopSse() {
+  const events = [];
+  events.push('data: {"id":"c9","object":"chat.completion.chunk","created":1,"model":"deepseek-v4.1-flash","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}');
+  for (let i = 0; i < 8 * CYCLE.length; i++) {
+    const tok = CYCLE[i % CYCLE.length];
+    events.push('data: ' + JSON.stringify({
+      id: 'c9', object: 'chat.completion.chunk', created: 1, model: 'deepseek-v4.1-flash',
+      choices: [{ index: 0, delta: { reasoning_content: tok + ' ' }, finish_reason: null }],
+    }));
+  }
+  events.push('data: {"id":"c9","object":"chat.completion.chunk","created":1,"model":"deepseek-v4.1-flash","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}');
+  events.push('data: [DONE]');
+  return events.join('\n\n');
+}
+
+function sseUpstream(text) {
+  const bytes = Buffer.from(text, 'utf8');
+  let sent = false;
+  return {
+    body: {
+      getReader() {
+        return {
+          read() {
+            if (sent) return Promise.resolve({ done: true, value: undefined });
+            sent = true;
+            return Promise.resolve({ done: false, value: bytes });
+          },
+          cancel() { return Promise.resolve(); },
+        };
+      },
+    },
+  };
+}
+
+function captureRes() {
+  const writes = [];
+  let ended = false;
+  return {
+    writeHead() {},
+    write(c) { writes.push(String(c)); },
+    end(c) { if (c !== undefined) writes.push(String(c)); ended = true; },
+    get writes() { return writes; },
+    get ended() { return ended; },
+  };
+}
+
+test('relayStream cuts the stream and omits [DONE] when a loop is detected', async () => {
+  const guard = createStreamGuard({ minRepeats: 8, maxCycleWords: 80, tailWords: 1200, checkEveryWords: 40 });
+  const hits = [];
+  const res = captureRes();
+  await relayStream(sseUpstream(loopSse()), res, { guard, onLoop: (h) => hits.push(h) });
+
+  const body = res.writes.join('');
+  assert.equal(body.includes('[DONE]'), false, 'must not send [DONE] on a loop');
+  assert.equal(hits.length, 1, 'onLoop must fire exactly once');
+  assert.equal(hits[0].cycleWords, 10);
+  assert.equal(hits[0].channel, 'reasoning');
+  assert.equal(res.ended, true, 'response must be ended');
+});
+
+test('relayStream still ends normally with [DONE] when no guard is passed', async () => {
+  const res = captureRes();
+  await relayStream(sseUpstream(loopSse()), res);
+  assert.equal(res.writes.join('').includes('[DONE]'), true);
+});
+
+test('relayStream ends normally when the guard never fires', async () => {
+  const guard = createStreamGuard({ minRepeats: 8, maxCycleWords: 80, tailWords: 1200, checkEveryWords: 40 });
+  const res = captureRes();
+  await relayStream(sseUpstream(RSSE), res, { guard });
+  assert.equal(res.writes.join('').includes('[DONE]'), true);
+});
