@@ -8,11 +8,13 @@ const { getAccountPool, isQuotaExhausted } = require('./lib/pool');
 const { buildUpstreamBody } = require('./lib/normalize');
 const { optimizeMessageImages } = require('./lib/images');
 const { relayStream, accumulateNonStream } = require('./lib/translate');
+const { readConfigFromEnv, createStreamGuard } = require('./lib/loop-detector');
 
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.PORT || 4121);
 const UPSTREAM = 'https://www.workbuddy.ai/v2/chat/completions';
 const MAX_BODY_BYTES = 512 * 1024 * 1024; // 512MB to support large multi-image agentic payloads
+const LOOP_GUARD_CONFIG = readConfigFromEnv();
 
 function sendJson(res, status, obj) {
   if (res.writableEnded) return;
@@ -202,7 +204,18 @@ async function handleChat(req, res) {
     break;
   }
 
-  if (wantStream) return relayStream(upRes, res);
+  if (wantStream) {
+    if (!LOOP_GUARD_CONFIG.enabled) return relayStream(upRes, res);
+    return relayStream(upRes, res, {
+      guard: createStreamGuard(LOOP_GUARD_CONFIG),
+      onLoop: (hit) => {
+        console.warn(
+          `[workbuddy-bridge] loop guard fired: model=${upBody.model} channel=${hit.channel} ` +
+          `cycleWords=${hit.cycleWords} repeats=${hit.repeats}`
+        );
+      },
+    });
+  }
 
   try {
     const completion = await accumulateNonStream(upRes, upBody.model);

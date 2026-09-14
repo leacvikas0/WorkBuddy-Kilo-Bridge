@@ -99,3 +99,30 @@ The bridge translates Tencent's native token usage schema into OpenAI standard f
 | `completion_tokens` | `usage.completion_tokens` | `tokens.output` |
 | `reasoning_tokens` | `usage.completion_tokens_details.reasoning_tokens` | `tokens.reasoning` |
 | `total_tokens` | `usage.total_tokens` | `tokens.total` |
+
+---
+
+## 4. Loop Guard
+
+The bridge terminates a stream when the model degenerates into a repeated-phrase loop,
+ending the turn without `[DONE]` so the client sees a failed response.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `WB_LOOP_GUARD` | `1` | Set to `0` to disable the guard entirely |
+| `WB_LOOP_MIN_REPEATS` | `8` | Consecutive repeats of a cycle required to fire |
+| `WB_LOOP_MAX_CYCLE_WORDS` | `80` | Longest cycle length (in words) considered |
+| `WB_LOOP_TAIL_WORDS` | `1200` | Size of the bounded tail buffer, in words |
+| `WB_LOOP_CHECK_EVERY_WORDS` | `40` | Minimum new words between detection passes |
+
+Both `content` and `reasoning_content` are watched, independently. A cycle must carry
+information to fire: it needs at least two distinct tokens, or a single token containing
+a letter or digit. This prevents ASCII-art rules (`- - - - - - - -`) from being read as
+a loop. Invalid values fall back to the default; the bridge always starts.
+
+When the guard fires, the bridge logs:
+
+```
+[workbuddy-bridge] loop guard fired: model=deepseek-v4.1-flash channel=reasoning cycleWords=10 repeats=8
+```
+

@@ -274,3 +274,63 @@ test('POST chat automatically rotates account on 6004 frequency limit with non-4
   }
 });
 
+
+test('POST chat streaming cuts a looping stream and omits [DONE]', async () => {
+  const fp = path.join(os.tmpdir(), 'wb-loop-auth-' + Date.now() + '-' + Math.random().toString(16).slice(2) + '.json');
+  fs.writeFileSync(fp, JSON.stringify({ account: { uid: 'u1' }, auth: { accessToken: 't', refreshToken: 'r', domain: 'www.workbuddy.ai' } }));
+  process.env.WB_AUTH_PATH = fp;
+  process.env.WB_LOOP_MIN_REPEATS = '8';
+  process.env.WB_LOOP_CHECK_EVERY_WORDS = '1';
+  // server.js reads config at require time, so reload it with the env in place.
+  delete require.cache[require.resolve('../server')];
+  const { handleChat: guardedHandleChat } = require('../server');
+
+  const cycle = ['Let', 'me', 'write.', 'OK.'];
+  const events = ['data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"deepseek-v4.1-flash","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}'];
+  for (let i = 0; i < 8 * cycle.length; i++) {
+    events.push('data: ' + JSON.stringify({
+      id: 'c1', object: 'chat.completion.chunk', created: 1, model: 'deepseek-v4.1-flash',
+      choices: [{ index: 0, delta: { reasoning_content: cycle[i % cycle.length] + ' ' }, finish_reason: null }],
+    }));
+  }
+  events.push('data: [DONE]');
+  const LOOP_SSE = events.join('\n\n');
+
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(LOOP_SSE, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+  const req = { method: 'POST', url: '/v1/chat/completions', on(ev, fn) { if (ev === 'data') fn(JSON.stringify({ model: 'deepseek-v4.1-flash', messages: [{ role: 'user', content: 'hi' }], stream: true })); if (ev === 'end') fn(); return this; }, destroy() {} };
+  const res = { status: 0, chunks: [], writeHead(s) { this.status = s; }, write(c) { this.chunks.push(String(c)); }, end(c) { if (c !== undefined) this.chunks.push(String(c)); } };
+  try {
+    await guardedHandleChat(req, res);
+    assert.equal(res.status, 200);
+    const body = res.chunks.join('');
+    assert.equal(body.includes('[DONE]'), false, 'looping stream must not complete with [DONE]');
+    assert.ok(body.includes('reasoning_content'), 'the good prefix should still be relayed');
+  } finally {
+    globalThis.fetch = realFetch;
+    delete process.env.WB_AUTH_PATH;
+    delete process.env.WB_LOOP_MIN_REPEATS;
+    delete process.env.WB_LOOP_CHECK_EVERY_WORDS;
+    delete require.cache[require.resolve('../server')];
+    fs.unlinkSync(fp);
+  }
+});
+
+test('POST chat streaming still completes normally for non-looping output', async () => {
+  const fp = path.join(os.tmpdir(), 'wb-noloop-auth-' + Date.now() + '-' + Math.random().toString(16).slice(2) + '.json');
+  fs.writeFileSync(fp, JSON.stringify({ account: { uid: 'u1' }, auth: { accessToken: 't', refreshToken: 'r', domain: 'www.workbuddy.ai' } }));
+  process.env.WB_AUTH_PATH = fp;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(CHAT_SSE, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+  const req = { method: 'POST', url: '/v1/chat/completions', on(ev, fn) { if (ev === 'data') fn(JSON.stringify({ model: 'deepseek-v4.1-flash', messages: [{ role: 'user', content: 'hi' }], stream: true })); if (ev === 'end') fn(); return this; }, destroy() {} };
+  const res = { status: 0, chunks: [], writeHead(s) { this.status = s; }, write(c) { this.chunks.push(String(c)); }, end(c) { if (c !== undefined) this.chunks.push(String(c)); } };
+  try {
+    await handleChat(req, res);
+    assert.equal(res.status, 200);
+    assert.ok(res.chunks.join('').includes('[DONE]'), 'normal stream must still end with [DONE]');
+  } finally {
+    globalThis.fetch = realFetch;
+    delete process.env.WB_AUTH_PATH;
+    fs.unlinkSync(fp);
+  }
+});
