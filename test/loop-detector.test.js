@@ -63,3 +63,39 @@ test('findTailLoop still fires on a single repeated word', () => {
   // detector's search starts at 2. 16 tokens are needed for 8 repeats.
   assert.deepEqual(findTailLoop(repeatCycle(['OK.'], 16), { minRepeats: 8, maxCycleWords: 80 }), { cycleWords: 2, repeats: 8 });
 });
+
+const { readConfigFromEnv, DEFAULT_OPTIONS } = require('../lib/loop-detector');
+
+test('readConfigFromEnv returns defaults for an empty environment', () => {
+  assert.deepEqual(readConfigFromEnv({}), DEFAULT_OPTIONS);
+});
+
+test('readConfigFromEnv reads each override', () => {
+  const cfg = readConfigFromEnv({
+    WB_LOOP_MIN_REPEATS: '4',
+    WB_LOOP_MAX_CYCLE_WORDS: '12',
+    WB_LOOP_TAIL_WORDS: '500',
+    WB_LOOP_CHECK_EVERY_WORDS: '1',
+  });
+  assert.equal(cfg.minRepeats, 4);
+  assert.equal(cfg.maxCycleWords, 12);
+  assert.equal(cfg.tailWords, 500);
+  assert.equal(cfg.checkEveryWords, 1);
+  assert.equal(cfg.enabled, true);
+});
+
+test('readConfigFromEnv treats WB_LOOP_GUARD=0 as disabled', () => {
+  assert.equal(readConfigFromEnv({ WB_LOOP_GUARD: '0' }).enabled, false);
+  assert.equal(readConfigFromEnv({ WB_LOOP_GUARD: '1' }).enabled, true);
+});
+
+test('readConfigFromEnv falls back to defaults on garbage values', () => {
+  const cfg = readConfigFromEnv({
+    WB_LOOP_MIN_REPEATS: 'banana',
+    WB_LOOP_TAIL_WORDS: '-5',
+    WB_LOOP_MAX_CYCLE_WORDS: '',
+  });
+  assert.equal(cfg.minRepeats, DEFAULT_OPTIONS.minRepeats);
+  assert.equal(cfg.tailWords, DEFAULT_OPTIONS.tailWords);
+  assert.equal(cfg.maxCycleWords, DEFAULT_OPTIONS.maxCycleWords);
+});
