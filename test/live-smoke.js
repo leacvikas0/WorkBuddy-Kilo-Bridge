@@ -4,9 +4,10 @@ const { readAuth, buildUpstreamHeaders } = require('../lib/auth');
 const { buildUpstreamBody } = require('../lib/normalize');
 const UPSTREAM = 'https://www.workbuddy.ai/v2/chat/completions';
 const path = require('path');
+const AUTH_REL_PATH = path.join('CodeBuddyExtension', 'Data', 'Public', 'auth', 'workbuddy-desktop-ai.info');
 const DEFAULT_AUTH_PATH = process.env.LOCALAPPDATA
-  ? path.join(process.env.LOCALAPPDATA, 'CodeBuddyExtension', 'Data', 'Public', 'auth', 'workbuddy-desktop-ai.info')
-  : 'C:\\Users\\silen\\AppData\\Local\\CodeBuddyExtension\\Data\\Public\\auth\\workbuddy-desktop-ai.info';
+  ? path.join(process.env.LOCALAPPDATA, AUTH_REL_PATH)
+  : path.join(process.env.USERPROFILE || require('os').homedir(), 'AppData', 'Local', AUTH_REL_PATH);
 (async () => {
   if (process.env.WB_LIVE !== '1') { console.log('set WB_LIVE=1 to run'); process.exit(0); }
   const auth = readAuth(process.env.WB_AUTH_PATH || DEFAULT_AUTH_PATH);

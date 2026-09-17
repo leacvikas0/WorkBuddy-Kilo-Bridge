@@ -38,6 +38,21 @@ You should see:
 
 ---
 
+## Running on Linux
+
+WorkBuddy's desktop client is Windows/macOS only, so credentials must be harvested on
+Windows and copied to the Linux machine. The bridge itself runs on Linux unchanged.
+
+- **Human guide**: [`docs/HANDOFF_LINUX.md`](docs/HANDOFF_LINUX.md) — the two-phase
+  workflow (harvest on Windows, run on Linux).
+- **Agent brief**: [`AGENTS.md`](AGENTS.md) — the actionable task list for an agent on
+  the Linux machine, including the systemd unit and harness wiring.
+
+Short version: harvest credentials into `accounts/` on Windows, verify each one there,
+transfer the folder, then `npm install && npm test` and install the systemd unit.
+
+---
+
 ## Kilo Code Integration (How to Write it in Kilo)
 
 To connect the Kilo Code extension in VS Code to this bridge:
@@ -122,24 +137,28 @@ Use `manage-bridge.ps1` to control the 24/7 background service:
 
 ## Documentation Index
 
-Comprehensive documentation is organized in the [`docs/`](file:///C:/Users/silen/Documents/WorkBuddy-Kilo-Bridge/docs/) directory:
+Comprehensive documentation is organized in the [`docs/`](docs/) directory:
 
-1. **[Kilo Code Integration Guide](docs/KILO_SETUP.md)**:
+1. **[Linux Handoff Guide](docs/HANDOFF_LINUX.md)**:
+   - Windows credential harvest, Linux service setup.
+   - Two-phase workflow for moving off Windows.
+2. **[Kilo Code Integration Guide](docs/KILO_SETUP.md)**:
    - Complete `kilo.jsonc` provider & model configuration.
    - UI setup in VS Code.
    - Timeout and reasoning token budget tuning.
-2. **[Architecture & Design Specification](file:///C:/Users/silen/Documents/WorkBuddy-Kilo-Bridge/docs/ARCHITECTURE.md)**:
+3. **[Architecture & Design Specification](docs/ARCHITECTURE.md)**:
    - System design and request pipeline.
    - Normalization layer (`max_tokens`, `tool_choice`, `stop`, `cache_control`).
    - Image optimization engine (MozJPEG 85 4:4:4, sliding window).
    - 24/7 Windows Task Scheduler supervisor.
    - Dual-supervisor conflict root-cause analysis.
-3. **[API Reference](file:///C:/Users/silen/Documents/WorkBuddy-Kilo-Bridge/docs/API_REFERENCE.md)**:
+4. **[API Reference](docs/API_REFERENCE.md)**:
    - Endpoints (`/healthz`, `/v1/models`, `/v1/chat/completions`).
    - Model specifications (`deepseek-v4.1-flash`, `hy4-preview`).
    - Token usage and cache mapping.
-4. **[Operations & Troubleshooting](file:///C:/Users/silen/Documents/WorkBuddy-Kilo-Bridge/docs/OPERATIONS.md)**:
-   - Service management via PowerShell.
+   - Loop guard configuration.
+5. **[Operations & Troubleshooting](docs/OPERATIONS.md)**:
+   - Service management on Windows and Linux.
    - Fixing `ECONNRESET`, 32k reasoning loops, and error 6004.
    - WorkBuddy desktop authentication refreshes.
 
@@ -150,20 +169,23 @@ Comprehensive documentation is organized in the [`docs/`](file:///C:/Users/silen
 ```
 WorkBuddy-Kilo-Bridge/
 |-- server.js                 # Primary HTTP server (Port 4121)
-|-- daemon.js                 # Supervisor process (Health checks, auto-restart)
-|-- run-bridge-daemon.vbs     # Headless WScript runner for Task Scheduler
-|-- setup-service.ps1         # Windows Scheduled Task installer
-|-- manage-bridge.ps1         # Operator CLI (status, start, stop, restart, logs)
+|-- daemon.js                 # Supervisor process (Windows only; use systemd on Linux)
+|-- run-bridge-daemon.vbs     # Headless WScript runner for Task Scheduler (Windows only)
+|-- setup-service.ps1         # Windows Scheduled Task installer (Windows only)
+|-- manage-bridge.ps1         # Operator CLI (Windows only)
+|-- AGENTS.md                 # Agent brief for Linux setup & operation
 |-- package.json              # Project manifest and test runner
 |-- README.md                 # Project index & quickstart
-|-- workbuddy-bridge.log      # Active runtime logs
+|-- accounts/                 # Harvested credentials (GITIGNORED - never commit)
 |-- lib/
-|   |-- auth.js               # WorkBuddy desktop credentials reader
+|   |-- auth.js               # WorkBuddy credentials reader
 |   |-- pool.js               # Multi-account pool manager & sticky quota failover
 |   |-- images.js             # MozJPEG image compressor & sliding window
 |   |-- models.js             # Model registry & capabilities
 |   |-- normalize.js          # Request schema normalization
 |   |-- translate.js          # SSE streaming relay & chunk sanitization
+|   |-- loop-detector.js      # Repetition-loop detection (do not disable)
+|   |-- continuation.js       # Continuation request builder after a loop cut
 |-- test/
 |   |-- auth.test.js          # Auth discovery & token parsing unit tests
 |   |-- pool.test.js          # Account pool rotation & 429 failover unit tests
@@ -171,10 +193,12 @@ WorkBuddy-Kilo-Bridge/
 |   |-- normalize.test.js     # Body normalization & edge case tests
 |   |-- server.test.js        # HTTP route & account failover integration tests
 |   |-- translate.test.js     # SSE parsing & usage translation tests
+|   |-- loop-detector.test.js # Loop detection unit tests
 |   |-- live-smoke.js         # Live upstream smoke test suite
 |-- docs/
+    |-- HANDOFF_LINUX.md      # Windows harvest -> Linux run workflow
     |-- ARCHITECTURE.md       # Technical architecture specification
-    |-- API_REFERENCE.md      # Endpoint & model specifications
+    |-- API_REFERENCE.md      # Endpoint, model & loop guard specifications
     |-- OPERATIONS.md         # Operational handbook & troubleshooting
 ```
 

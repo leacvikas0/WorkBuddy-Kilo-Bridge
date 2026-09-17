@@ -78,8 +78,8 @@ test('optimizeMessageImages preserves all images in context without omitting', a
 });
 
 test('compressImageBuffer drastically reduces large PNG buffer', async () => {
-  const imgPath = 'C:/Users/silen/Downloads/subway - Copy - Copy/tools/shots/g-nobloom.png';
-  if (fs.existsSync(imgPath)) {
+  const imgPath = process.env.WB_TEST_IMAGE;
+  if (imgPath && fs.existsSync(imgPath)) {
     const rawBuf = fs.readFileSync(imgPath);
     const compressedUri = await compressImageBuffer(rawBuf);
     assert(compressedUri !== null);

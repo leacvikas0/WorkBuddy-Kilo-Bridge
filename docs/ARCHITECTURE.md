@@ -35,7 +35,7 @@
 
 ## 2. Codebase Organization & File Map
 
-Base Directory: `C:\Users\silen\Documents\WorkBuddy-Kilo-Bridge`
+Base Directory: the repository root (referred to below as `<REPO>`).
 
 ```
 WorkBuddy-Kilo-Bridge/
@@ -81,9 +81,12 @@ WorkBuddy-Kilo-Bridge/
   - `POST /v1/chat/completions`: Main inference endpoint. Authenticates, optimizes images, normalizes schemas, connects upstream to Tencent, and relays SSE streams.
 
 ### 3.2 lib/auth.js (Authentication Engine)
-- **Source**: Directly reads local user session from:
-  `C:\Users\silen\AppData\Local\CodeBuddyExtension\Data\Public\auth\workbuddy-desktop-ai.info`
-- **Dynamic Refresh**: The file is read on every request. If the user logs in or refreshes their session in the WorkBuddy desktop client, the bridge picks up the new Bearer token immediately without requiring a restart.
+- **Source**: Reads the WorkBuddy session from a local credential file. On Windows the
+  default path is `%LOCALAPPDATA%\CodeBuddyExtension\Data\Public\auth\workbuddy-desktop-ai.info`.
+  On Linux this path does not exist; credentials come from the harvested files in
+  `accounts/` instead. `WB_AUTH_PATH=<path>` overrides all discovery and pins a single file.
+- **Dynamic Refresh**: The credential file is re-read on every request. If the file is
+  updated externally, the bridge picks up the new Bearer token without a restart.
 - **Header Injection**: Constructs upstream headers including `Authorization: Bearer <token>`, `X-Client-Version: 1.0.0`, and browser spoofing headers required by Tencent's gateway.
 
 ### 3.3 lib/normalize.js (Schema Adaptation)
@@ -171,3 +174,59 @@ Tencent's prompt prefix caching is strictly scoped to the authenticated `X-User-
    - Kilo Code waits on the open connection and receives a seamless HTTP 200 stream without error modals or broken agent turns.
 3. **Session Expiry (401) Recovery**: When an account returns 401, the bridge calls `tryRefresh()` with `refreshToken` and updates the refreshed token on disk (`account.filePath`), keeping credentials fresh across reboots.
 4. **Security**: The `accounts/` directory is strictly ignored in `.gitignore`, ensuring personal tokens are never pushed to Git.
+
+---
+
+## 6. Platform Portability
+
+The bridge is designed to run on both Windows and Linux. The split is clean:
+
+### 6.1 Platform-neutral (runs unchanged on Linux)
+
+| File | Notes |
+| --- | --- |
+| `server.js` | No `process.platform` branches. Binds `127.0.0.1:4121`. |
+| `lib/auth.js` | Pure file read + `fetch`. |
+| `lib/pool.js` | Directory scan; default path is Windows-shaped but `WB_AUTH_PATH` and `accounts/` make it moot. |
+| `lib/normalize.js` | Pure transformation. |
+| `lib/translate.js` | Stream relay. |
+| `lib/loop-detector.js` | Pure detection, no I/O. |
+| `lib/continuation.js` | Pure transformation. |
+| `lib/models.js` | Static registry. |
+| `lib/images.js` | Uses `sharp`, which ships prebuilt Linux x64/arm64 binaries. |
+
+This was verified empirically, not assumed: the full test suite passes on Debian 12 and
+Debian 13, `sharp` loads with vips 8.18.6, and a live streaming completion was served
+from a Linux container.
+
+### 6.2 Windows-only (must be replaced on Linux)
+
+| File | Why it is Windows-only | Linux replacement |
+| --- | --- | --- |
+| `daemon.js` | `netstat -ano` for port discovery, `taskkill /F /T` for process termination, `windowsHide` spawn option | systemd unit — see [`AGENTS.md`](../AGENTS.md) §4 |
+| `setup-service.ps1` | Registers a Windows Scheduled Task | `systemctl enable --now` |
+| `manage-bridge.ps1` | PowerShell operator CLI over Scheduled Tasks and `Get-NetTCPConnection` | `systemctl` / `journalctl` — see [`OPERATIONS.md`](OPERATIONS.md) §4 |
+| `run-bridge-daemon.vbs` | WScript headless launcher | Not needed |
+
+None of these are required for the bridge to serve traffic. They only provide
+start-on-boot and restart-on-crash, which systemd supplies natively.
+
+### 6.3 Network requirement
+
+The host must be able to reach `https://www.workbuddy.ai`. This is the one hard external
+dependency. Sandboxed or restricted hosting environments that allowlist only package
+registries will fail at this hop with `upstream unreachable`, even though the bridge
+itself is healthy. Verify before deploying:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' --max-time 20 https://www.workbuddy.ai/
+```
+
+### 6.4 Credentials on Linux
+
+There is no WorkBuddy desktop client for Linux, so credentials cannot be minted locally.
+They are harvested on Windows and copied in — see [`HANDOFF_LINUX.md`](HANDOFF_LINUX.md).
+`lib/pool.js` scans `accounts/*.json`, so placing one file per account in that directory
+is all that is required. Tokens are ~1-year JWTs; there is currently no working automatic
+refresh (the refresh endpoint returns `404 Route Not Found`), so renewal means
+re-harvesting on Windows.
