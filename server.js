@@ -7,8 +7,9 @@ const { readAuth, buildUpstreamHeaders, tryRefresh } = require('./lib/auth');
 const { getAccountPool, isQuotaExhausted } = require('./lib/pool');
 const { buildUpstreamBody } = require('./lib/normalize');
 const { optimizeMessageImages } = require('./lib/images');
-const { relayStream, accumulateNonStream } = require('./lib/translate');
+const { relayStream, createRelay, accumulateNonStream } = require('./lib/translate');
 const { readConfigFromEnv, createStreamGuard } = require('./lib/loop-detector');
+const { buildContinuationBody } = require('./lib/continuation');
 
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.PORT || 4121);
@@ -206,15 +207,80 @@ async function handleChat(req, res) {
 
   if (wantStream) {
     if (!LOOP_GUARD_CONFIG.enabled) return relayStream(upRes, res);
-    return relayStream(upRes, res, {
-      guard: createStreamGuard(LOOP_GUARD_CONFIG),
-      onLoop: (hit) => {
-        console.warn(
-          `[workbuddy-bridge] loop guard fired: model=${upBody.model} channel=${hit.channel} ` +
-          `cycleWords=${hit.cycleWords} repeats=${hit.repeats}`
-        );
-      },
-    });
+
+    const relay = createRelay(upRes, res);
+    const partial = relay.partial;
+    let lastBody = upBody;
+    let retriesUsed = 0;
+
+    for (;;) {
+      const result = await relay.relay(upRes, {
+        guard: createStreamGuard(LOOP_GUARD_CONFIG),
+        holdOnLoop: true,
+        resume: retriesUsed > 0,
+        meta: retriesUsed > 0 ? relay.meta : null,
+        onLoop: (hit) => {
+          console.warn(
+            `[workbuddy-bridge] loop guard fired: model=${upBody.model} channel=${hit.channel} ` +
+            `cycleWords=${hit.cycleWords} repeats=${hit.repeats}`
+          );
+        },
+      });
+
+      if (result.reason !== 'loop') return;
+
+      // Tool calls already streamed: splicing a continuation would corrupt
+      // them, so fail the turn exactly as before.
+      if (relay.sawToolCalls) {
+        try { res.end(); } catch {}
+        return;
+      }
+
+      if (retriesUsed >= LOOP_GUARD_CONFIG.maxRetries) {
+        console.warn(`[workbuddy-bridge] loop guard: retry cap reached (${LOOP_GUARD_CONFIG.maxRetries}), failing turn`);
+        try { res.end(); } catch {}
+        return;
+      }
+
+      const continuationBody = buildContinuationBody(lastBody, partial, result.hit);
+      let nextRes = null;
+      for (let attempt = 0; attempt < maxAttempts && !nextRes; attempt++) {
+        let account;
+        try { account = pool.getActiveAccount(); }
+        catch { break; }
+        try {
+          const candidate = await postUpstream(account.auth, continuationBody, ac.signal);
+          if (candidate.status === 401 && attempt < maxAttempts - 1) { pool.rotateNext('session_expired_401'); continue; }
+          if (candidate.status === 429 && attempt < maxAttempts - 1) {
+            await candidate.text().catch(() => '');
+            pool.rotateNext('quota_limit_429');
+            continue;
+          }
+          nextRes = candidate;
+        } catch (e) {
+          if (ac.signal.aborted) return;
+          break;
+        }
+      }
+
+      if (!nextRes) {
+        console.warn('[workbuddy-bridge] loop guard: continuation request failed, failing turn');
+        try { res.end(); } catch {}
+        return;
+      }
+
+      if (!nextRes.ok) {
+        const text = await nextRes.text().catch(() => '');
+        console.warn('[workbuddy-bridge] loop guard: continuation rejected: HTTP ' + nextRes.status + ' -> ' + text.slice(0, 200));
+        try { res.end(); } catch {}
+        return;
+      }
+
+      retriesUsed++;
+      upRes = nextRes;
+      lastBody = continuationBody;
+      console.warn(`[workbuddy-bridge] loop guard: continuing turn (attempt ${retriesUsed}/${LOOP_GUARD_CONFIG.maxRetries})`);
+    }
   }
 
   try {

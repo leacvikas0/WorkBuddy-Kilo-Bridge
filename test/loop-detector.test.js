@@ -100,6 +100,14 @@ test('readConfigFromEnv falls back to defaults on garbage values', () => {
   assert.equal(cfg.maxCycleWords, DEFAULT_OPTIONS.maxCycleWords);
 });
 
+test('readConfigFromEnv reads WB_LOOP_MAX_RETRIES with a default of 2', () => {
+  assert.equal(readConfigFromEnv({}).maxRetries, 2);
+  assert.equal(readConfigFromEnv({ WB_LOOP_MAX_RETRIES: '0' }).maxRetries, 0);
+  assert.equal(readConfigFromEnv({ WB_LOOP_MAX_RETRIES: '5' }).maxRetries, 5);
+  assert.equal(readConfigFromEnv({ WB_LOOP_MAX_RETRIES: 'nope' }).maxRetries, 2);
+  assert.equal(readConfigFromEnv({ WB_LOOP_MAX_RETRIES: '-1' }).maxRetries, 2);
+});
+
 const { createStreamGuard } = require('../lib/loop-detector');
 
 const CYCLE_10 = ['Let', 'me', 'write.', 'Let', 'me', 'search.', 'Let', 'me', 'go.', 'OK.'];

@@ -170,12 +170,14 @@ function sseUpstream(text) {
 function captureRes() {
   const writes = [];
   let ended = false;
+  let headCalls = 0;
   return {
-    writeHead() {},
+    writeHead() { headCalls++; },
     write(c) { writes.push(String(c)); },
     end(c) { if (c !== undefined) writes.push(String(c)); ended = true; },
     get writes() { return writes; },
     get ended() { return ended; },
+    get headCalls() { return headCalls; },
   };
 }
 
@@ -204,4 +206,42 @@ test('relayStream ends normally when the guard never fires', async () => {
   const res = captureRes();
   await relayStream(sseUpstream(RSSE), res, { guard });
   assert.equal(res.writes.join('').includes('[DONE]'), true);
+});
+
+test('relayStream with holdOnLoop returns the loop result and keeps the response open', async () => {
+  const guard = createStreamGuard({ minRepeats: 8, maxCycleWords: 80, tailWords: 1200, checkEveryWords: 1 });
+  const res = captureRes();
+  const result = await relayStream(sseUpstream(loopSse()), res, { guard, holdOnLoop: true });
+  assert.equal(result.reason, 'loop');
+  assert.equal(result.hit.channel, 'reasoning');
+  assert.equal(res.ended, false, 'client response must stay open for the continuation');
+  assert.equal(res.writes.join('').includes('[DONE]'), false);
+  assert.ok(result.partial.reasoning.length > 0, 'forwarded reasoning must be captured');
+  assert.equal(result.sawToolCalls, false);
+  assert.equal(result.meta.id, 'c9');
+});
+
+test('relayStream with resume does not write headers again', async () => {
+  const res = captureRes();
+  const result = await relayStream(sseUpstream(RSSE), res, { resume: true });
+  assert.equal(result.reason, 'done');
+  assert.equal(res.headCalls, 0);
+  assert.equal(res.writes.join('').includes('[DONE]'), true);
+});
+
+test('relayStream reports tool calls that were already forwarded', async () => {
+  const res = captureRes();
+  const result = await relayStream(sseUpstream(SSE), res, {});
+  assert.equal(result.sawToolCalls, true);
+  assert.equal(result.reason, 'done');
+});
+
+test('relayStream rewrites chunk metadata when meta is supplied', async () => {
+  const res = captureRes();
+  const result = await relayStream(sseUpstream(RSSE), res, { resume: true, meta: { id: 'first', created: 1, model: 'm0' } });
+  assert.equal(result.reason, 'done');
+  const { events } = parseSseText(res.writes.join(''));
+  assert.equal(events[0].id, 'first');
+  assert.equal(events[0].model, 'm0');
+  assert.equal(events[events.length - 1].id, 'first');
 });

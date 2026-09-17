@@ -104,8 +104,15 @@ The bridge translates Tencent's native token usage schema into OpenAI standard f
 
 ## 4. Loop Guard
 
-The bridge terminates a stream when the model degenerates into a repeated-phrase loop,
-ending the turn without `[DONE]` so the client sees a failed response.
+When the model degenerates into a repeated-phrase loop, the bridge cuts that
+stream and silently continues the turn: it re-sends the same request with an
+extra user message quoting the tail of the partial output and instructing the
+model to stop restating intent and produce the actual output. The client sees
+one continuous stream that still ends with `[DONE]`.
+
+If every attempt loops, or if tool calls had already been streamed (a splice
+would corrupt them), the bridge gives up and ends the turn without `[DONE]`,
+which is the old fail-fast behavior.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -114,6 +121,7 @@ ending the turn without `[DONE]` so the client sees a failed response.
 | `WB_LOOP_MAX_CYCLE_WORDS` | `80` | Longest cycle length (in words) considered |
 | `WB_LOOP_TAIL_WORDS` | `1200` | Size of the bounded tail buffer, in words |
 | `WB_LOOP_CHECK_EVERY_WORDS` | `40` | Minimum new words between detection passes |
+| `WB_LOOP_MAX_RETRIES` | `2` | Continuation attempts before giving up (`0` disables recovery) |
 
 Both `content` and `reasoning_content` are watched, independently. A cycle must carry
 information to fire: it needs at least two distinct tokens, or a single token containing
@@ -124,5 +132,23 @@ When the guard fires, the bridge logs:
 
 ```
 [workbuddy-bridge] loop guard fired: model=deepseek-v4.1-flash channel=reasoning cycleWords=10 repeats=8
+[workbuddy-bridge] loop guard: continuing turn (attempt 1/2)
 ```
+
+and if recovery is exhausted:
+
+```
+[workbuddy-bridge] loop guard: retry cap reached (2), failing turn
+```
+
+### How recovery stays invisible to the client
+
+- The response head is written exactly once; continuations resume the same
+  connection (`lib/translate.js` `createRelay`).
+- Resumed chunks are rewritten with the first attempt's stream `id`/`model`/
+  `created`, so the client cannot tell two upstream streams apart.
+- Only deltas actually forwarded are quoted back in the continuation prompt;
+  the quoted tails are capped so the degenerate text does not return in full.
+- A loop on the `content` channel mid-tool-call is not retried.
+
 
